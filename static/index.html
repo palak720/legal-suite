@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Legal Suite</title>
+<style>
+ :root{--bg:#fff;--fg:#1a1a1a;--mut:#666;--bd:#d9d9d9;--ac:#1d4ed8}
+ @media(prefers-color-scheme:dark){:root{--bg:#161616;--fg:#eee;--mut:#aaa;--bd:#3a3a3a;--ac:#6ea0ff}}
+ body{font:15px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--fg);max-width:900px;margin:0 auto;padding:16px}
+ nav button{padding:8px 14px;border:1px solid var(--bd);background:none;color:var(--fg);cursor:pointer}
+ nav button.on{background:var(--ac);color:#fff;border-color:var(--ac)}
+ label{display:block;margin:10px 0 2px;font-size:13px;color:var(--mut)}
+ input,select,textarea{width:100%;box-sizing:border-box;padding:7px;background:var(--bg);color:var(--fg);border:1px solid var(--bd);border-radius:4px;font:inherit}
+ button.go{margin-top:12px;padding:9px 18px;background:var(--ac);color:#fff;border:0;border-radius:4px;cursor:pointer}
+ .row{display:flex;gap:10px;flex-wrap:wrap}.row>div{flex:1;min-width:200px}
+ .err{color:#c62828;margin-top:8px}.card{border:1px solid var(--bd);border-radius:6px;padding:12px;margin-top:14px;overflow-x:auto}
+ table{border-collapse:collapse;width:100%;font-size:13px}td,th{border:1px solid var(--bd);padding:4px 6px;text-align:left;vertical-align:top}
+ pre{white-space:pre-wrap}.hide{display:none}img.cap{border:1px solid var(--bd);height:44px}
+</style></head><body>
+<h2>Legal Suite</h2>
+<nav><button id="b1" class="on">Case search</button><button id="b2">Draft generator</button></nav>
+
+<section id="t1">
+ <div class="row"><div><label>Method</label>
+  <select id="method"><option value="cnr">CNR number</option><option value="case">Case number</option></select></div></div>
+ <div id="fcnr"><label>CNR (16 chars)</label><input id="cnr" maxlength="16" placeholder="DLND020000602007"></div>
+ <div id="fcase" class="hide">
+  <div class="row"><div><label>State</label><select id="state"></select></div><div><label>District</label><select id="dist"></select></div></div>
+  <div class="row"><div><label>Court complex</label><select id="cx"></select></div><div><label>Establishment</label><select id="est"></select></div></div>
+  <div class="row"><div><label>Case type</label><select id="ctype"></select></div><div><label>Case number</label><input id="cno"></div><div><label>Year</label><input id="yr" maxlength="4"></div></div>
+ </div>
+ <label>Captcha <a href="#" id="rc">(refresh)</a></label>
+ <div class="row" style="align-items:center"><img id="cap" class="cap" alt="captcha"><input id="capv" style="max-width:160px" autocomplete="off"></div>
+ <button class="go" id="go">Search</button><div id="e1" class="err"></div><div id="out"></div>
+</section>
+
+<section id="t2" class="hide">
+ <label>Template</label><select id="tpl"></select>
+ <div class="row"><div><label>Court *</label><input id="court" placeholder="District Judge, Saket Courts, New Delhi"></div></div>
+ <div class="row"><div><label>Petitioner / Plaintiff name *</label><input id="pn"></div><div><label>Respondent / Defendant name *</label><input id="rn"></div></div>
+ <div class="row"><div><label>Petitioner address</label><input id="pa"></div><div><label>Respondent address</label><input id="ra"></div></div>
+ <label>Facts * (one per line)</label><textarea id="facts" rows="6"></textarea>
+ <label>Relief / demands (one per line)</label><textarea id="relief" rows="3"></textarea>
+ <div class="row"><div><label>Subject</label><input id="subj"></div><div><label>Place</label><input id="place"></div><div><label>Advocate</label><input id="adv"></div></div>
+ <button class="go" id="gen">Generate draft</button><div id="e2" class="err"></div>
+ <div id="draft" class="card hide"><pre id="dtext"></pre><button class="go" id="dl">Download .txt</button></div>
+</section>
+<script>
+const $=id=>document.getElementById(id);let sid="";
+// textContent everywhere (never innerHTML) -> portal data can't inject markup.
+function tab(n){$("t1").classList.toggle("hide",n!=1);$("t2").classList.toggle("hide",n!=2);$("b1").classList.toggle("on",n==1);$("b2").classList.toggle("on",n==2)}
+$("b1").onclick=()=>tab(1);$("b2").onclick=()=>tab(2);
+async function api(u,o){const r=await fetch(u,o);const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.detail||r.statusText);return j}
+const post=(u,b)=>api(u,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)});
+function fill(sel,items){sel.replaceChildren(new Option("-- select --",""),...items.map(i=>new Option(i.label,i.value)))}
+async function init(){try{const j=await api("/api/session",{method:"POST"});sid=j.sid;$("cap").src=j.captcha;fill($("state"),j.states)}catch(e){$("e1").textContent=e.message}}
+async function refCap(){try{$("cap").src=(await api("/api/captcha/"+sid)).captcha;$("capv").value=""}catch(e){await init()}}
+$("rc").onclick=e=>{e.preventDefault();refCap()};
+$("method").onchange=()=>{const c=$("method").value=="cnr";$("fcnr").classList.toggle("hide",!c);$("fcase").classList.toggle("hide",c)};
+const q=o=>new URLSearchParams(o).toString();
+async function cascade(level,from,to,params){fill(to,[]);if(!from.value)return;try{fill(to,await api(`/api/options/${sid}?`+q({level,...params()})))}catch(e){$("e1").textContent=e.message}}
+$("state").onchange=()=>cascade("districts",$("state"),$("dist"),()=>({state:$("state").value}));
+$("dist").onchange=()=>cascade("complexes",$("dist"),$("cx"),()=>({state:$("state").value,dist:$("dist").value}));
+$("cx").onchange=()=>cascade("establishments",$("cx"),$("est"),()=>({state:$("state").value,dist:$("dist").value,complex:$("cx").value}));
+$("est").onchange=()=>cascade("case_types",$("est"),$("ctype"),()=>({state:$("state").value,dist:$("dist").value,complex:$("cx").value,est:$("est").value}));
+function kvTable(o){const t=document.createElement("table");for(const[k,v]of Object.entries(o)){const r=t.insertRow();r.insertCell().textContent=k;r.insertCell().textContent=v}return t}
+function rowsTable(rows){const t=document.createElement("table");if(!rows.length)return t;const h=Object.keys(rows[0]).filter(k=>k!="links");const hr=t.insertRow();h.forEach(k=>{const c=document.createElement("th");c.textContent=k;hr.appendChild(c)});
+ rows.forEach(r=>{const tr=t.insertRow();h.forEach(k=>tr.insertCell().textContent=r[k]);if(r.links&&r.links.length){const a=document.createElement("a");a.href=r.links[0].url;a.target="_blank";a.rel="noopener";a.textContent="PDF";tr.insertCell().appendChild(a)}});return t}
+function h(t){const e=document.createElement("h4");e.textContent=t;return e}
+function render(c){const d=document.createElement("div");d.className="card";const ti=document.createElement("h3");ti.textContent=c.title||"Case";d.append(ti,h("Case details"),kvTable(c.case_details),h("Status"),kvTable(c.status));
+ const p=x=>x.map(i=>i.name+(i.advocate?" (Adv: "+i.advocate+")":"")).join("; ");
+ d.append(h("Petitioner(s)"),Object.assign(document.createElement("div"),{textContent:p(c.petitioners)}),h("Respondent(s)"),Object.assign(document.createElement("div"),{textContent:p(c.respondents)}));
+ if(c.acts.length)d.append(h("Acts"),rowsTable(c.acts));d.append(h("Hearing history"),rowsTable(c.hearing_history),h("Orders & judgments"),rowsTable(c.orders));
+ const raw=document.createElement("details");raw.innerHTML="<summary>Raw JSON</summary>";const pre=document.createElement("pre");pre.textContent=JSON.stringify(c,null,2);raw.appendChild(pre);d.appendChild(raw);return d}
+$("go").onclick=async()=>{$("e1").textContent="";$("out").replaceChildren();$("go").disabled=true;
+ try{let cs;const cap=$("capv").value;
+  if($("method").value=="cnr")cs=[await post("/api/search/cnr",{sid,cnr:$("cnr").value,captcha:cap})];
+  else cs=(await post("/api/search/case",{sid,captcha:cap,state_code:$("state").value,dist_code:$("dist").value,complex_code:$("cx").value,est_code:$("est").value,case_type:$("ctype").value,case_no:$("cno").value,year:$("yr").value})).results;
+  cs.forEach(c=>$("out").appendChild(render(c)))}
+ catch(e){$("e1").textContent=e.message}
+ finally{$("go").disabled=false;refCap()}}; // captcha is single-use: always refresh
+let last="";
+async function loadTpl(){const t=await api("/api/templates");$("tpl").replaceChildren(...t.map(x=>new Option(x.title,x.id)))}
+$("gen").onclick=async()=>{$("e2").textContent="";
+ try{const j=await post("/api/draft/"+$("tpl").value,{court:$("court").value,petitioner_name:$("pn").value,respondent_name:$("rn").value,petitioner_address:$("pa").value,respondent_address:$("ra").value,facts:$("facts").value,relief:$("relief").value,subject:$("subj").value,place:$("place").value,advocate:$("adv").value});
+  last=j.text;$("dtext").textContent=last;$("draft").classList.remove("hide")}catch(e){$("e2").textContent=e.message}};
+$("dl").onclick=()=>{const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([last],{type:"text/plain"}));a.download="draft.txt";a.click()};
+init();loadTpl();
+</script></body></html>
