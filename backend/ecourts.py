@@ -5,11 +5,13 @@ DESIGN NOTES (the "why" the assignment asks for)
 ------------------------------------------------
 * The portal is a server-rendered PHP app driven by jQuery AJAX. Every call is
   POST ?p=<module>/<action> with form-encoded data and returns JSON that wraps
-  an HTML fragment. Three things must be replicated for a call to be accepted:
+  an HTML fragment (a few endpoints return the raw <option> HTML directly).
+  Three things must be replicated for a call to be accepted:
     1. the session cookie (set on the first GET of the home page),
-    2. `app_token`: a rolling CSRF-style token. Each JSON response returns a
-       fresh one and the NEXT request must send that one, so Session.post()
-       always stores the latest token. Reusing a stale token is the #1 cause of
+    2. `app_token`: a rolling CSRF-style token. It is EMPTY in the initial
+       HTML; the server hands out a real one in its AJAX responses and the
+       NEXT request must send that one, so Session.post() always stores the
+       latest token. Reusing a stale token is a common cause of
        "invalid request" errors.
     3. a captcha value that belongs to THIS cookie session.
 * CAPTCHA: I deliberately do NOT auto-solve it (no OCR / solver service). The
@@ -37,6 +39,9 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 
 ROUTES = {
+    # Observed in the home page HTML: the state dropdown calls
+    # get_district('home/fetchDist', value). Used as a fallback below.
+    "districts_home": "home/fetchDist",
     "districts": "casestatus/fillDistrict",
     "complexes": "casestatus/fillcomplex",
     "establishments": "casestatus/fillCourtEstablishment",
@@ -91,20 +96,37 @@ class Session:
         self.created = time.time()
 
     # -- low level ---------------------------------------------------------
+    @staticmethod
+    def _find_states(soup) -> str:
+        """The portal's markup uses single quotes and different ids on
+        different pages (state_code1 on home), so we match any <select> whose
+        id/name contains 'state' and that has a real list of options. More
+        robust than hard-coding one id."""
+        for sel in soup.find_all("select"):
+            ident = (sel.get("id") or sel.get("name") or "").lower()
+            if "state" in ident and len(sel.find_all("option")) > 5:
+                return str(sel)
+        return ""
+
     def bootstrap(self):
-        """GET the home page: sets the cookie, gives the first app_token and
-        the (static) list of states."""
+        """GET home (cookie + captcha session), then find the state list.
+        app_token is EMPTY on first load: the server issues the real token in
+        its first AJAX response, which post() already picks up."""
         r = self.http.get(BASE, timeout=30)
         r.raise_for_status()
         soup = BeautifulSoup(r.text, "html.parser")
         tok = soup.find("input", {"id": "app_token"})
-        self.app_token = tok.get("value", "") if tok else ""
-        sel = soup.find("select", {"id": "sess_state_code"})
-        self.states_html = str(sel) if sel else ""
+        self.app_token = (tok.get("value") if tok else "") or ""
+        self.states_html = self._find_states(soup)
         if not self.states_html:
-            # Edge case: maintenance / WAF page instead of the real app.
-            raise EcourtsError("eCourts home page did not load as expected "
-                               "(maintenance or blocked).")
+            # Fallback: the Case Status page carries its own state dropdown.
+            r2 = self.http.get(f"{BASE}?p=casestatus/index", timeout=30)
+            r2.raise_for_status()
+            self.states_html = self._find_states(
+                BeautifulSoup(r2.text, "html.parser"))
+        if not self.states_html:
+            raise EcourtsError("Could not find the state list on the portal "
+                               "(page layout may have changed).")
 
     def post(self, route: str, data: dict):
         payload = {**data, "ajax_req": "true", "app_token": self.app_token}
@@ -113,6 +135,11 @@ class Session:
         try:
             js = r.json()
         except ValueError:
+            # Some endpoints (dropdown fillers) return bare <option> HTML
+            # instead of JSON. Accept that; anything else means the session
+            # expired or the request was rejected.
+            if "<option" in r.text:
+                return {"html": r.text}
             raise EcourtsError("Portal returned non-JSON (session expired or "
                                "request rejected).")
         # Rolling token: always keep the newest one.
@@ -137,8 +164,20 @@ class Session:
         return parse_options(self.states_html)
 
     def districts(self, state):
-        return parse_options(_first_html(
-            self.post(ROUTES["districts"], {"state_code": state})))
+        # Try the Case Status route first, then the one the home page's own
+        # state dropdown uses. Whichever returns options wins.
+        last_err = None
+        for key in ("districts", "districts_home"):
+            try:
+                opts = parse_options(_first_html(
+                    self.post(ROUTES[key], {"state_code": state})))
+                if opts:
+                    return opts
+            except (EcourtsError, requests.RequestException) as e:
+                last_err = e
+        if last_err:
+            raise last_err
+        return []
 
     def complexes(self, state, dist):
         # option values look like "<complex_code>@<est codes>@<flag>"; the raw
