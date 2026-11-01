@@ -5,7 +5,7 @@ Two tools in one small web app:
 1. **District Court case scraper**: look up a case on the eCourts services portal by **CNR number** or by **State / District / Court Complex / Establishment / Case Type / Case Number / Year**, and get the result as structured JSON (also rendered in the UI).
 2. **Legal draft generator**: produces structured legal drafts (plaint, legal notice, bail application, affidavit) from form inputs. Pure Python: **no LLM, no external API**.
 
-**Live app:** `<ADD YOUR RENDER LINK HERE>`
+**Live app:** `< https://legal-suite.onrender.com>`
 **Repo:** `<https://github.com/palak720/legal-suite>`
 
 ---
